@@ -1,0 +1,13 @@
+.venv/
+.state/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+coverage.xml
+
+build/
+dist/
+*.pdb
+nvngx_dlss.dll
+nvngx_dlssnr.dll

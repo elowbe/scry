@@ -1,0 +1,43 @@
+name: Cross-platform checks
+on: [push, pull_request]
+jobs:
+  portable:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Linux system dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libgirepository1.0-dev libcairo2-dev pkg-config
+      - name: Install
+        run: python -m pip install -e .[test]
+      - name: Import and portable contracts
+        run: python -m pytest tests/test_portability.py tests/test_config.py tests/test_temporal.py tests/test_pacing.py
+      - name: Parse Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/bootstrap.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count) { throw ($errors | Out-String) }
+      - name: Compile all modules
+        run: python -m compileall -q gamestream scripts
+      - name: Build release wheel
+        run: python -m pip wheel . --no-deps -w dist
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg libgirepository1.0-dev libcairo2-dev pkg-config
+      - run: python -m pip install -e .[test]
+      - run: python -m pytest
+      - run: node --test tests/test_client.cjs

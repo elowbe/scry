@@ -1,0 +1,19 @@
+# Optional headless alternative to the Scry tray. Install Scry in ~/.local/share/scry
+# or replace these paths with the checkout's absolute location. Do not run both.
+[Unit]
+Description=Scry - Server
+After=graphical-session.target network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/scry
+ExecStart=%h/.local/share/scry/.venv/bin/python -m gamestream --config %h/.local/share/scry/config.toml serve
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=full
+ProtectHome=false
+
+[Install]
+WantedBy=graphical-session.target

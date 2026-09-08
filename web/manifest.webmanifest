@@ -1,0 +1,21 @@
+{
+  "name": "Scry Web",
+  "short_name": "Scry Web",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050904",
+  "theme_color": "#050904",
+  "description": "Play your games and desktop from Scry - Server on Linux or Windows",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png"
+    }
+  ]
+}

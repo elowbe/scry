@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#050904">
+  <meta name="color-scheme" content="dark">
+  <title>Scry Web</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#" aria-label="Scry Web home">
+        <img class="brand-icon" src="/icon.svg" alt="" width="48" height="48">
+        <span><strong>SCRY</strong><em>WEB</em></span>
+      </a>
+
+      <nav aria-label="Main navigation">
+        <button class="nav-item active" data-view="library">
+          <span class="nav-icon" aria-hidden="true">▦</span> Library
+        </button>
+        <button class="nav-item" data-view="system">
+          <span class="nav-icon" aria-hidden="true">◉</span> Host status
+        </button>
+      </nav>
+
+      <div class="host-summary">
+        <div class="status-line">
+          <span id="hostDot" class="status-dot"></span>
+          <span><b id="hostState">Checking host</b><small id="hostDetail">Running diagnostics…</small></span>
+        </div>
+        <div class="host-specs">
+          <span><b id="specResolution">2560 × 1440</b><small>Resolution</small></span>
+          <span><b id="specFps">60 FPS</b><small>Frame rate</small></span>
+        </div>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">HOST LIBRARY</p>
+          <h1>Ready when you are.</h1>
+        </div>
+        <label class="search">
+          <span aria-hidden="true">⌕</span>
+          <input id="searchInput" type="search" placeholder="Find a game" autocomplete="off">
+          <kbd>/</kbd>
+        </label>
+      </header>
+
+      <section id="libraryView" class="view active" aria-labelledby="libraryHeading">
+        <div class="section-head">
+          <div>
+            <h2 id="libraryHeading">Your games</h2>
+            <p id="gameCount">Scanning Steam libraries…</p>
+          </div>
+          <div class="legend"><span class="steam-mark"></span> Steam <span class="ubi-mark"></span> Ubisoft</div>
+        </div>
+        <div id="gameGrid" class="game-grid" aria-live="polite"></div>
+        <div id="emptyState" class="empty-state hidden">
+          <span>⌕</span>
+          <h3>No games found</h3>
+          <p>Try another search, or run the host doctor to check your Steam libraries.</p>
+        </div>
+      </section>
+
+      <section id="systemView" class="view" aria-labelledby="systemHeading">
+        <div class="section-head">
+          <div><h2 id="systemHeading">Host readiness</h2><p>Every required link in the streaming path.</p></div>
+          <button id="refreshHealth" class="button secondary">Run checks</button>
+        </div>
+        <article class="onboarding" aria-label="Getting started with Scry">
+          <p class="eyebrow">YOUR SCREEN, WITHIN REACH</p>
+          <h2>Make yourself at home.</h2>
+          <ol>
+            <li><strong>Check your host.</strong><span>Keep Scry - Server running in your desktop session. The lime tray icon means the server is online.</span></li>
+            <li><strong>Choose a screen or game.</strong><span>Open Desktop to stream immediately, or pick an installed Steam game from your library.</span></li>
+            <li><strong>Add DLSS when you want it.</strong><span>On the host, run setup with your nvngx_dlssnr.dll. Scry installs the supporting files. An NVIDIA RTX GPU and compatible driver are required for DLSS.</span></li>
+          </ol>
+          <p class="onboarding-note">First connection? Use the pairing link from your host. On Wayland, approve screen sharing if prompted.</p>
+        </article>
+        <div id="healthGrid" class="health-grid"></div>
+        <article class="info-panel">
+          <div class="info-icon">i</div>
+          <div><h3>Remote access</h3><p>For another network, use a private VPN such as Tailscale or configure a TURN server. Never expose this port without the access token and HTTPS.</p></div>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="gameDialog" class="game-dialog">
+    <button id="closeDialog" class="icon-button close" aria-label="Close">×</button>
+    <div id="dialogArt" class="dialog-art"></div>
+    <div class="dialog-content">
+      <p id="dialogProvider" class="eyebrow"></p>
+      <h2 id="dialogTitle"></h2>
+      <p id="dialogMeta" class="dialog-meta"></p>
+      <div class="quality-row">
+        <div><span id="dialogResolutionName">1080p</span><small id="dialogResolution">1920 × 1080</small></div>
+        <div><span id="dialogFps">60</span><small id="dialogFpsLabel">frames / sec</small></div>
+        <div><span>H.264</span><small>Low-latency video</small></div>
+      </div>
+      <label class="toggle-row" for="dlssToggle">
+        <span class="toggle-copy"><b>DLSS5 neural filter</b><small id="dlssDescription">Independent post-process · adds render latency</small></span>
+        <input id="dlssToggle" type="checkbox">
+        <span class="toggle" aria-hidden="true"></span>
+      </label>
+      <p id="dialogError" class="error-text hidden"></p>
+      <button id="launchButton" class="button primary"><span>▶</span> Start stream</button>
+    </div>
+  </dialog>
+
+  <section id="player" class="player hidden" aria-label="Game stream player">
+    <video id="video" autoplay playsinline></video>
+    <div id="playerBackdrop" class="player-backdrop">
+      <div class="loader"></div>
+      <h2 id="playerStatus">Starting stream</h2>
+      <p id="playerHint">Waiting for WebRTC video…</p>
+    </div>
+    <div class="player-topbar">
+      <div class="playing-title"><span class="live-dot"></span><b id="playingName">Game</b></div>
+      <div class="stream-stats">
+        <span><b id="statResolution">—</b><small>stream</small></span>
+        <span><b id="statFps">—</b><small>fps</small></span>
+        <span><b id="statBitrate">—</b><small>Mbps</small></span>
+        <span><b id="statLatency">—</b><small>network RTT</small></span>
+        <span><b id="statBuffer">—</b><small>video buffer</small></span>
+        <span id="dlssStat" class="hidden"><b id="statDlss">—</b><small>DLSS</small></span>
+      </div>
+      <div class="player-actions">
+        <button id="sendEscape" class="player-button" title="Send Escape to game">ESC</button>
+        <button id="liveDlss" class="player-button" aria-pressed="false" title="Toggle DLSS5 (Ctrl+Alt+D)">DLSS5 off</button>
+        <button id="settingsButton" class="player-button" aria-expanded="false" aria-controls="streamSettings" title="Stream quality and latency">Settings</button>
+        <button id="reconnectButton" class="player-button" title="Reconnect stream">↻</button>
+        <button id="fullscreenButton" class="player-button" title="Fullscreen">⛶</button>
+        <button id="stopButton" class="player-button danger" title="Save your game, then end the stream and quit the game">■</button>
+      </div>
+    </div>
+    <section id="streamSettings" class="stream-settings hidden" aria-label="Live stream settings">
+      <label for="qualitySlider">Quality / latency <b id="qualityName">Balanced</b></label>
+      <input id="qualitySlider" type="range" min="0" max="4" step="1" value="2">
+      <div class="slider-ends"><span>Lower latency</span><span>More detail</span></div>
+      <p id="qualityDetail"></p>
+      <p id="networkDetail" role="status">Connection diagnostics appear while streaming.</p>
+      <form id="advancedSettings">
+        <div id="settingsFields"></div>
+        <p>0 removes the video bitrate cap; network capacity still applies. Lower QP preserves more detail. High FPS and DLSS settings require GPU headroom. Audio and transport overhead are additional to the video cap.</p>
+        <button type="submit" id="applyAdvanced" class="player-button">Apply settings</button>
+        <button type="button" id="originalRenderer" class="player-button" title="Disable stabilization and neural-first pass order">Original flickery renderer</button>
+        <p id="rendererDetail"></p>
+        <button type="button" id="resetAdvanced" class="player-button">Restore preset</button>
+      </form>
+      <p id="settingsStatus" role="status" aria-live="polite">Changes apply while your game keeps running.</p>
+      <p class="shortcut-help">Ctrl+Alt+D: toggle DLSS5<br>Escape: release mouse · ESC button: game Escape</p>
+    </section>
+    <button id="capturePrompt" class="capture-prompt">
+      <span class="mouse-glyph">↖</span>
+      Click game to capture mouse
+      <small>Esc releases mouse · ESC toolbar button sends game Escape</small>
+    </button>
+    <div id="toast" class="toast hidden"></div>
+  </section>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

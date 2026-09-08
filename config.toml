@@ -1,0 +1,63 @@
+[server]
+host = "0.0.0.0"
+port = 8443
+# Set this to the DNS name or LAN/VPN IP remote clients use before running init.
+public_host = ""
+cert_file = ".state/tls.crt"
+key_file = ".state/tls.key"
+token_file = ".state/access.token"
+# For Internet/NAT use, configure a TURN server. LAN/Tailscale/WireGuard needs none.
+ice_urls = []
+ice_username = ""
+ice_credential = ""
+
+[stream]
+width = 2560
+height = 1440
+fps = 60
+bitrate_mbps = 60
+max_bitrate_mbps = 90
+rate_control = "vbr"
+cq = 18
+vbv_ms = 100
+# GNOME Wayland: unattended native capture; other Wayland: portal; X11: x11grab.
+capture_backend = "auto"
+# Empty selects the primary GNOME monitor; set e.g. "HDMI-1" to pin one.
+capture_monitor = ""
+audio_source = "@DEFAULT_MONITOR@"
+encoder = "auto"
+encoder_preset = "p4"
+color_range = "tv"
+color_space = "bt709"
+extra_capture_args = []
+
+[steam]
+require_proton = false
+launch_args = []
+
+[input]
+enabled = true
+grab_timeout_seconds = 15
+mouse_sensitivity = 1.0
+
+[dlss]
+upscaling_factor = 1.0
+# All stabilization is opt-in. Off restores the original independent renderer.
+# Optional methods: static_regions (no warping) or optical_flow (experimental).
+temporal_stability = false
+temporal_method = "static_regions"
+neural_before_upscale = false
+target_fps = 60
+workers = 2
+fail_closed = true
+frame_timeout_seconds = 5.0
+
+# Standalone Ubisoft Connect games can be added without touching their files:
+# [[ubisoft_games]]
+# id = "my-game"
+# name = "My Ubisoft Game"
+# executable = "/games/Ubisoft Game Launcher/UbisoftConnect.exe"
+# compat_data = "/home/me/.local/share/game-stream/ubisoft-prefix"
+# uplay_id = "1234"
+# launch_args = []
+# artwork = "/games/my-game-cover.jpg"

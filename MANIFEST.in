@@ -1,0 +1,9 @@
+include LICENSE THIRD_PARTY_NOTICES.md Setup.cmd requirements.txt
+recursive-include scripts *.sh *.ps1 *.py
+recursive-include config *.service *.rules *.conf
+recursive-include docs *.md
+include config.toml
+prune .state
+prune .venv
+exclude native/bin/*.pdb
+global-exclude nvngx_dlss.dll nvngx_dlssnr.dll
