@@ -6,7 +6,7 @@ Stream your games and desktop to a browser with **Scry**.
 
 **Scry - Server** runs on your host computer. **Scry Web** is the browser client, with a game library, desktop access, live stream settings and host diagnostics. Video and audio travel over WebRTC, while keyboard, mouse and controller input return to the host.
 
-Scry supports standard streaming without an NVIDIA GPU. Optional DLSS neural rendering enhances captured frames before encoding, without modifying game files.
+Scry supports standard streaming without an NVIDIA GPU. Optional **DLSS 5 Neural Rendering** enhances captured frames before encoding, without modifying game files.
 
 ## Features
 
@@ -14,7 +14,7 @@ Scry supports standard streaming without an NVIDIA GPU. Optional DLSS neural ren
 - Desktop streaming without Steam or a game launcher.
 - H.264 video with automatic NVIDIA NVENC selection and CPU encoding fallback.
 - System audio, physical keyboard input, relative mouse input and Xbox-style controller support.
-- Live resolution, frame rate, bitrate and DLSS controls.
+- Live resolution, frame rate, bitrate and DLSS 5 Neural Rendering controls.
 - A desktop tray menu with server status, start/stop controls, browser access and logs.
 - Authenticated HTTPS access and one controlling client at a time.
 
@@ -26,7 +26,7 @@ Scry supports standard streaming without an NVIDIA GPU. Optional DLSS neural ren
 | System audio | PulseAudio or PipeWire's PulseAudio interface | WASAPI loopback |
 | Keyboard and mouse | uinput | Native Windows input |
 | Controller | Virtual Xbox-style uinput device | ViGEmBus virtual controller |
-| DLSS runtime | Dedicated Proton prefix | Native Windows process |
+| DLSS 5 Neural Rendering runtime | Dedicated Proton prefix | Native Windows process |
 
 The server requires a logged-in graphical session. Windows support targets Windows 10/11 x64 and is experimental; hardware validation is limited. Linux compatibility depends on the distribution's multimedia packages, graphics drivers and compositor.
 
@@ -56,9 +56,9 @@ powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1
 
 Windows setup requires Microsoft App Installer (`winget`). It installs FFmpeg and the ViGEmBus controller driver, which may request administrator access or a restart.
 
-Both installers manage Python, the project virtual environment, application dependencies, a local HTTPS certificate and a private pairing token. Setup also creates the **Scry - Server** application-menu shortcut and prompts for an optional DLSS DLL.
+Both installers manage Python, the project virtual environment, application dependencies, a local HTTPS certificate and a private pairing token. Setup also creates the **Scry - Server** application-menu shortcut and prompts for the optional DLSS 5 Neural Rendering DLL.
 
-See the [installation guide](docs/installation.md) for package requirements, desktop tray support, alternate configurations, updates and removal.
+The full installation guide is located at [`docs/installation.md`](docs/installation.md). It covers package requirements, Linux distribution support, Windows prerequisites, desktop tray support, DLSS 5 Neural Rendering setup, updates and removal.
 
 ## First connection
 
@@ -73,9 +73,9 @@ A bright tray icon means the server is responding; a dim icon means it is starti
 
 Desktop streaming leaves applications open when the stream ends. Ending a game session closes the active game after confirmation in the client.
 
-## Optional DLSS
+## Optional DLSS 5 Neural Rendering
 
-DLSS requires a supported NVIDIA RTX GPU, compatible drivers and a compatible **user-supplied `nvngx_dlssnr.dll`**. Scry does not download or redistribute this neural rendering DLL.
+DLSS 5 Neural Rendering requires a supported NVIDIA RTX GPU, compatible drivers and a compatible **user-supplied `nvngx_dlssnr.dll`**. Scry does not download or redistribute the DLSS 5 Neural Rendering DLL.
 
 Supply its path during installation, or run setup afterward:
 
@@ -91,13 +91,13 @@ Supply its path during installation, or run setup afterward:
 .venv\Scripts\python.exe -m gamestream setup --dlss-dll 'C:\path\nvngx_dlssnr.dll'
 ```
 
-Setup copies the DLL into the configured runtime directory, downloads the supporting Super Resolution runtime and prepares Proton on Linux when needed. The open-source bridge and helper programs are included; ComfyUI is not required. Downloaded components retain their upstream licenses.
+Setup copies the DLSS 5 Neural Rendering DLL into the configured runtime directory, downloads the supporting NVIDIA DLSS Super Resolution runtime and prepares Proton on Linux when needed. The open-source bridge and helper programs are included; ComfyUI is not required. Downloaded components retain their upstream licenses.
 
-DLSS runs as a separate post-processing stage between capture and encoding. It adds processing latency and may reduce the delivered frame rate. Toggle it from the player toolbar or with **Ctrl+Alt+D**.
+DLSS 5 Neural Rendering runs as a separate post-processing stage between capture and encoding. It adds processing latency and may reduce the delivered frame rate. Toggle it from the player toolbar or with **Ctrl+Alt+D**.
 
 ### Rendering options
 
-The default pass order is **DLSS upscale → neural rendering**. **Neural rendering before DLSS upscale** reverses that order. At native resolution (1×), only the neural pass runs.
+The default pass order is **DLSS Super Resolution upscale → DLSS 5 Neural Rendering**. **Neural rendering before DLSS upscale** reverses that order. At native resolution (1×), only the DLSS 5 Neural Rendering pass runs.
 
 Stabilization is disabled by default. Two methods are available:
 
@@ -120,7 +120,7 @@ Host-level settings belong in [`config.toml`](config.toml):
 | `[stream]` | Capture backend, monitor, audio source, encoder and video defaults |
 | `[steam]` | Steam location, launch command and optional Proton configuration |
 | `[input]` | Remote input and mouse sensitivity |
-| `[dlss]` | Runtime location, rendering options and worker settings |
+| `[dlss]` | DLSS 5 Neural Rendering runtime, pass order, stabilization and worker settings |
 | `[[ubisoft_games]]` | Standalone Ubisoft game entries |
 
 Steam and display settings are discovered automatically where supported. Relative file paths resolve beside the configuration file. Use `--config PATH` before the command to select another configuration.
