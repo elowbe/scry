@@ -227,3 +227,6 @@ main { min-width: 0; }
   .onboarding { padding: 20px; }
   .onboarding span { overflow-wrap: anywhere; }
 }
+
+.cursor-layer { position: fixed; overflow: hidden; pointer-events: none; z-index: 2; }
+#localCursor { position: absolute; left: 0; top: 0; pointer-events: none; will-change: transform; max-width: none; }

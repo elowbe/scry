@@ -13,6 +13,7 @@ from .errors import PreflightError
 MSG_KEY = 0x01
 MSG_MOUSE_MOVE = 0x02
 MSG_MOUSE_BUTTON = 0x03
+MSG_MOUSE_POSITION = 0x05
 MSG_WHEEL = 0x04
 MSG_GAMEPAD = 0x10
 MSG_RELEASE_ALL = 0x7F
@@ -47,6 +48,8 @@ def decode_packet(payload: bytes) -> tuple:
         return ("key", DOM_CODES[code_id], bool(down))
     if kind == MSG_MOUSE_MOVE and len(payload) == 5:
         return ("mouse_move", *struct.unpack_from("<hh", payload, 1))
+    if kind == MSG_MOUSE_POSITION and len(payload) == 9:
+        return ("mouse_position", *struct.unpack_from("<IHH", payload, 1))
     if kind == MSG_MOUSE_BUTTON and len(payload) == 3:
         button, down = struct.unpack_from("<BB", payload, 1)
         if button > 4:
@@ -77,6 +80,7 @@ class VirtualInput:
         self.state = InputState(set(), set())
         self.keyboard = self.mouse = self.gamepad = None
         self._ecodes = None
+        self.absolute_mouse = None
 
     def open(self) -> None:
         if not self.config.enabled:
@@ -110,6 +114,15 @@ class VirtualInput:
                 vendor=0x045E,
                 product=0x028E,
                 version=1,
+            )
+            # An absolute-only mouse is classified separately by libinput;
+            # adding ABS axes to the relative mouse makes some hosts ignore them.
+            self.absolute_mouse = UInput(
+                {ecodes.EV_KEY: [ecodes.BTN_LEFT, ecodes.BTN_RIGHT, ecodes.BTN_MIDDLE],
+                 ecodes.EV_ABS: [(ecodes.ABS_X, AbsInfo(0, 0, 65535, 0, 0, 0)),
+                                 (ecodes.ABS_Y, AbsInfo(0, 0, 65535, 0, 0, 0))]},
+                name="Scry - Server Absolute Mouse", bustype=ecodes.BUS_USB,
+                input_props=[ecodes.INPUT_PROP_POINTER],
             )
             pad_buttons = [
                 ecodes.BTN_SOUTH, ecodes.BTN_EAST, ecodes.BTN_WEST, ecodes.BTN_NORTH,
@@ -211,6 +224,11 @@ class VirtualInput:
         self.mouse.write(ecodes.EV_REL, ecodes.REL_Y, round(dy * sensitivity))
         self.mouse.syn()
 
+    def _handle_mouse_position(self, epoch: int, x: int, y: int) -> None:
+        self.absolute_mouse.write(self._ecodes.EV_ABS, self._ecodes.ABS_X, x)
+        self.absolute_mouse.write(self._ecodes.EV_ABS, self._ecodes.ABS_Y, y)
+        self.absolute_mouse.syn()
+
     def _handle_mouse_button(self, button: int, down: bool) -> None:
         ecodes = self._ecodes
         buttons = [ecodes.BTN_LEFT, ecodes.BTN_MIDDLE, ecodes.BTN_RIGHT, ecodes.BTN_SIDE, ecodes.BTN_EXTRA]
@@ -278,10 +296,10 @@ class VirtualInput:
             self.release_all()
         except Exception:
             pass
-        for device in (self.gamepad, self.mouse, self.keyboard):
+        for device in (self.gamepad, self.mouse, self.keyboard, self.absolute_mouse):
             if device:
                 device.close()
-        self.gamepad = self.mouse = self.keyboard = None
+        self.gamepad = self.mouse = self.keyboard = self.absolute_mouse = None
 
 if sys.platform == "win32":
     from .windows_input import WindowsInput as VirtualInput

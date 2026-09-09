@@ -99,6 +99,10 @@ def main():
     failures = []
     stopped = threading.Event()
     writer = None
+    cursor_reader = None
+    cursor_fd = None
+    cursor_session = None
+    cursor_node = None
 
     def request(method, signature, positional, options):
         token = 'gs_' + uuid.uuid4().hex
@@ -136,6 +140,7 @@ def main():
     try:
         if args.method == 'gnome':
             session, node, monitor = start(bus, Gio, GLib, args.monitor)
+            cursor_session, cursor_node, _ = start(bus, Gio, GLib, args.monitor, cursor_only=True)
             destination = 'org.gnome.Mutter.ScreenCast'
             properties = {}
             print(f'GNOME unattended capture: {monitor}', file=sys.stderr, flush=True)
@@ -145,7 +150,7 @@ def main():
             })['session_handle']
             request('SelectSources', '(oa{sv})', (session,), {
                 'types': GLib.Variant('u', 1), 'multiple': GLib.Variant('b', False),
-                'cursor_mode': GLib.Variant('u', 2),
+                'cursor_mode': GLib.Variant('u', 4),
             })
             print('Select the game monitor in the host desktop screen-sharing dialog.', file=sys.stderr, flush=True)
             result = request('Start', '(osa{sv})', (session, ''), {})
@@ -158,6 +163,14 @@ def main():
                 GLib.Variant('(oa{sv})', (session, {})), GLib.VariantType.new('(h)'),
                 Gio.DBusCallFlags.NONE, 10000, None, None)
             fd = descriptors.get(reply.unpack()[0])
+        if args.method != 'gnome':
+            # A second connection needs a fresh portal-authorized socket, not a
+            # dup of the socket owned by GStreamer.
+            reply, descriptors = bus.call_with_unix_fd_list_sync(
+                destination, path, interface, 'OpenPipeWireRemote',
+                GLib.Variant('(oa{sv})', (session, {})), GLib.VariantType.new('(h)'),
+                Gio.DBusCallFlags.NONE, 10000, None, None)
+            cursor_fd = descriptors.get(reply.unpack()[0])
         pipeline = Gst.parse_launch(capture_pipeline(args.width, args.height))
         source = pipeline.get_by_name('desktop')
         if fd is not None:
@@ -187,6 +200,11 @@ def main():
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, lambda: (loop.quit(), False)[1])
         if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
             raise RuntimeError('PipeWire pipeline could not enter PLAYING')
+        from cursor_pipewire import CursorReader
+        try:
+            cursor_reader = CursorReader(cursor_node if cursor_node is not None else node, cursor_fd)
+        except Exception as exc:
+            raise RuntimeError('Cursor metadata could not start; install the C compiler and PipeWire development package using scripts/install-host.sh: ' + str(exc)) from exc
         sink = pipeline.get_by_name('frames')
         def pull_frame():
             sample = sink.emit('try-pull-sample', 0)
@@ -219,6 +237,14 @@ def main():
             raise RuntimeError(failures[-1])
     finally:
         stopped.set()
+        if cursor_reader:
+            cursor_reader.close()
+        if cursor_fd is not None:
+            os.close(cursor_fd)
+        if cursor_session:
+            bus.call_sync('org.gnome.Mutter.ScreenCast', cursor_session,
+                          'org.gnome.Mutter.ScreenCast.Session', 'Stop', None, None,
+                          Gio.DBusCallFlags.NONE, 2000, None)
         if writer:
             writer.join(timeout=1)
         if pipeline:

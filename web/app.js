@@ -2,7 +2,7 @@
 
 const $ = (selector) => document.querySelector(selector);
 const state = {
-  games: [], selected: null, config: null, pc: null, channel: null,
+  games: [], selected: null, config: null, pc: null, channel: null, pointerChannel: null, pointerTimer: null,
   remoteStream: null, statsTimer: null, sessionTimer: null, sessionCheckBusy: false, gamepadFrame: null,
   quality: 4, settings: null, dlssEnabled: false, settingsBusy: false, lastJitterDelay: 0, lastJitterCount: 0,
   keyDown: new Set(), lastPadState: "", lastBytes: 0, lastStatsAt: 0,
@@ -341,6 +341,25 @@ async function connectWebRtc() {
   const channel = pc.createDataChannel("input", { ordered: false, maxRetransmits: 0 });
   channel.binaryType = "arraybuffer";
   state.channel = channel;
+  const pointer = pc.createDataChannel("pointer", {ordered: true});
+  pointer.binaryType = "arraybuffer";
+  state.pointerChannel = pointer;
+  pointer.addEventListener("message", event => {
+    if (state.pc !== pc || typeof event.data !== "string") return;
+    try { receiveCursor(JSON.parse(event.data)); } catch (_) { /* Invalid metadata. */ }
+  });
+  pointer.addEventListener("open", () => {
+    if (state.pc !== pc) return;
+    state.pointerTimer = setInterval(() => flushPointer(), 16);
+  });
+  pointer.addEventListener("close", () => {
+    if (state.pc === pc) {
+      resetCursor();
+      if (state.pointerTimer) clearInterval(state.pointerTimer);
+      state.pointerTimer = null;
+      document.exitPointerLock?.();
+    }
+  });
 
   pc.addEventListener("track", (event) => {
     state.remoteStream.addTrack(event.track);
@@ -416,6 +435,11 @@ async function openPlayer(game) {
 
 function closePeer() {
   releaseAll();
+  resetCursor();
+  if (state.pointerTimer) clearInterval(state.pointerTimer);
+  state.pointerTimer = null;
+  if (state.pointerChannel) state.pointerChannel.close();
+  state.pointerChannel = null;
   if (state.statsTimer) clearInterval(state.statsTimer);
   state.statsTimer = null;
   if (state.sessionTimer) clearInterval(state.sessionTimer);
@@ -464,7 +488,11 @@ function startSessionMonitor() {
 }
 
 function canSend() { return state.channel?.readyState === "open"; }
-function sendBytes(buffer) { if (canSend()) state.channel.send(buffer); }
+function sendBytes(buffer) {
+  const type = new Uint8Array(buffer)[0];
+  if (type !== 0x10 && state.pointerChannel?.readyState === "open") state.pointerChannel.send(buffer);
+  else if (canSend()) state.channel.send(buffer);
+}
 
 function sendKey(code, down) {
   const id = CODE_IDS.get(code);
@@ -477,21 +505,130 @@ function sendKey(code, down) {
   sendBytes(buffer);
 }
 
+const DEFAULT_CURSOR_IMAGE = "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2224%22 height=%2224%22%3E%3Cpath d=%22M2 2L2 21L7 16L11 23L15 21L11 14L19 14Z%22 fill=%22white%22 stroke=%22black%22/%3E%3C/svg%3E";
+let cursor = {x: .5, y: .5, epoch: 0, ready: false, visible: true, pending: false, relativeX: 0, relativeY: 0};
+
+function resetCursor() {
+  cursor = {x: .5, y: .5, epoch: 0, ready: false, visible: true, pending: false, relativeX: 0, relativeY: 0};
+  $("#cursorLayer").classList.add("hidden");
+  $("#localCursor").src = DEFAULT_CURSOR_IMAGE;
+}
+
+function cursorRect() {
+  const video = $("#video"), rect = video.getBoundingClientRect();
+  const width = video.videoWidth || state.config?.width || 1920;
+  const height = video.videoHeight || state.config?.height || 1080;
+  const scale = Math.min(rect.width / width, rect.height / height);
+  return {left: rect.left + (rect.width-width*scale)/2, top: rect.top + (rect.height-height*scale)/2,
+    width: width*scale, height: height*scale};
+}
+
+function renderCursor() {
+  const layer = $("#cursorLayer");
+  const visible = cursor.visible && document.pointerLockElement === $("#video");
+  layer.classList.toggle("hidden", !visible);
+  if (!visible) return;
+  const rect = cursorRect();
+  Object.assign(layer.style, {left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px`});
+  const image = $("#localCursor");
+  if (cursor.image && image.getAttribute("src") !== cursor.image) image.src = cursor.image;
+  const sx = rect.width / (cursor.width || rect.width), sy = rect.height / (cursor.height || rect.height);
+  Object.assign(image.style, {width: `${(cursor.image_width || 24)*sx}px`, height: `${(cursor.image_height || 24)*sy}px`,
+    transform: `translate(${cursor.x*rect.width-(cursor.hotspot?.[0]||0)*sx}px, ${cursor.y*rect.height-(cursor.hotspot?.[1]||0)*sy}px)`});
+}
+
+function receiveCursor(message) {
+  if (message.type === "cursor_error") { showToast(`Cursor image unavailable: ${message.message}`); return; }
+  if (message.type === "cursor_image") {
+    if (!Number.isInteger(message.total) || message.total <= 0 || message.total > 1048576 || typeof message.data !== "string") return;
+    if (message.offset === 0) cursor.assembly = {id: message.id, total: message.total, data: ""};
+    const a = cursor.assembly;
+    if (!a || a.id !== message.id || a.data.length !== message.offset || a.data.length + message.data.length > a.total) return;
+    a.data += message.data;
+    if (a.data.length === a.total && a.data.startsWith("data:image/png;base64,")) {
+      cursor.image = a.data; cursor.imageId = a.id; cursor.assembly = null;
+    }
+    return;
+  }
+  if (message.type !== "cursor" || !Number.isInteger(message.epoch) || message.epoch < cursor.epoch ||
+      ![message.x,message.y,message.width,message.height].every(Number.isFinite)) return;
+  const wasReady = cursor.ready;
+  if (message.epoch > cursor.epoch) {
+    cursor.epoch = message.epoch;
+    // Only explicit host warps/mode changes can move the local pointer.
+    // Ordinary cursor-image updates never pull it back to a delayed host position.
+    const verifiedReset = message.warp_reason === "external" || message.warp_reason === "visibility" ||
+      message.visible !== cursor.visible || !wasReady;
+    if (message.warp && verifiedReset && (wasReady || !cursor.seeded)) {
+      cursor.x = Math.max(0, Math.min(1, message.x)); cursor.y = Math.max(0, Math.min(1, message.y));
+      cursor.pending = false;
+    } else if (message.visible && document.pointerLockElement === $("#video")) {
+      // Older hosts may label stale metadata as a warp. Keep our position and
+      // resend it with the new epoch so their stale-packet guard accepts it.
+      cursor.pending = true;
+    }
+  }
+  cursor.ready = true;
+  if (cursor.visible !== message.visible) { cursor.relativeX = cursor.relativeY = 0; }
+  cursor.visible = message.visible;
+  cursor.width = message.width; cursor.height = message.height;
+  cursor.hotspot = message.hotspot ?? cursor.hotspot;
+  cursor.image_width = message.image_width ?? cursor.image_width;
+  cursor.image_height = message.image_height ?? cursor.image_height;
+  if (!wasReady && cursor.seeded) cursor.pending = true;
+  renderCursor();
+}
+
+function flushPointer(force = false) {
+  if (!cursor.pending || state.pointerChannel?.readyState !== "open") return;
+  if (!force && state.pointerChannel.bufferedAmount > 4096) return;
+  cursor.pending = false;
+  if (!cursor.visible) {
+    // Raw-input FPS games need relative camera motion while their cursor is hidden.
+    const dx = cursor.relativeX, dy = cursor.relativeY;
+    cursor.relativeX = cursor.relativeY = 0;
+    sendRelativeMouse(dx, dy);
+    return;
+  }
+  const buffer = new ArrayBuffer(9), view = new DataView(buffer);
+  view.setUint8(0, 0x05); view.setUint32(1, cursor.epoch, true);
+  view.setUint16(5, Math.round(cursor.x*65535), true); view.setUint16(7, Math.round(cursor.y*65535), true);
+  state.pointerChannel.send(buffer);
+}
+
 function sendMouseMove(dx, dy) {
-  const buffer = new ArrayBuffer(5);
-  const view = new DataView(buffer);
-  view.setUint8(0, 0x02);
-  view.setInt16(1, Math.max(-32768, Math.min(32767, dx)), true);
-  view.setInt16(3, Math.max(-32768, Math.min(32767, dy)), true);
-  sendBytes(buffer);
+  if (state.pointerChannel?.readyState !== "open") { sendRelativeMouse(dx, dy); return; }
+  const rect = cursorRect();
+  if (cursor.visible && rect.width > 0 && rect.height > 0) {
+    cursor.x = Math.max(0, Math.min(1, cursor.x + dx/rect.width));
+    cursor.y = Math.max(0, Math.min(1, cursor.y + dy/rect.height));
+  } else {
+    cursor.relativeX += dx; cursor.relativeY += dy;
+  }
+  cursor.pending = true;
+  renderCursor();
+}
+
+function sendRelativeMouse(dx, dy) {
+  dx = Math.round(dx); dy = Math.round(dy);
+  while (dx || dy) {
+    const x = Math.max(-32768, Math.min(32767, dx)), y = Math.max(-32768, Math.min(32767, dy));
+    const buffer = new ArrayBuffer(5), view = new DataView(buffer);
+    view.setUint8(0, 0x02); view.setInt16(1, x, true); view.setInt16(3, y, true);
+    sendBytes(buffer);
+    dx -= x; dy -= y;
+  }
 }
 
 function sendMouseButton(button, down) {
+  if (button < 0 || button > 4) return;
+  flushPointer(true);
   const buffer = new Uint8Array([0x03, button, down ? 1 : 0]);
   sendBytes(buffer.buffer);
 }
 
 function sendWheel(dx, dy) {
+  flushPointer(true);
   const buffer = new ArrayBuffer(5);
   const view = new DataView(buffer);
   view.setUint8(0, 0x04);
@@ -501,6 +638,7 @@ function sendWheel(dx, dy) {
 }
 
 function releaseAll() {
+  cursor.pending = false; cursor.relativeX = cursor.relativeY = 0;
   state.keyDown.clear();
   sendBytes(new Uint8Array([0x7f]).buffer);
 }
@@ -590,7 +728,17 @@ function showToast(message) {
   showToast.timer = setTimeout(() => toast.classList.add("hidden"), 4500);
 }
 
-function capturePointer() {
+function capturePointer(event) {
+  // Locked click coordinates stay at the original lock position. Only seed
+  // from them when entering pointer lock, never for in-game left clicks.
+  if (document.pointerLockElement === $("#video")) return;
+  if (event?.target === $("#video") && Number.isFinite(event.clientX)) {
+    const rect = cursorRect();
+    cursor.x = Math.max(0, Math.min(1, (event.clientX-rect.left)/rect.width));
+    cursor.y = Math.max(0, Math.min(1, (event.clientY-rect.top)/rect.height));
+    cursor.seeded = true;
+    cursor.pending = true;
+  }
   if (!$("#video").requestPointerLock) return;
   try {
     const result = $("#video").requestPointerLock({ unadjustedMovement: true });
@@ -629,6 +777,8 @@ function bindEvents() {
     if ($("#player").classList.contains("hidden") || !state.keyDown.has(event.code)) return;
     event.preventDefault(); state.keyDown.delete(event.code); sendKey(event.code, false);
   });
+  window.addEventListener("resize", renderCursor);
+  $("#video").addEventListener("resize", renderCursor);
   window.addEventListener("blur", releaseAll);
   document.addEventListener("visibilitychange", () => { if (document.hidden) releaseAll(); });
   $("#closeDialog").addEventListener("click", () => $("#gameDialog").close());
@@ -661,6 +811,8 @@ function bindEvents() {
     const locked = document.pointerLockElement === $("#video");
     $("#capturePrompt").classList.toggle("hidden", locked);
     $("#player").classList.toggle("pointer-locked", locked);
+    renderCursor();
+    if (locked) cursor.pending = true;
     if (!locked) releaseAll();
     else { $("#streamSettings").classList.add("hidden"); $("#settingsButton").setAttribute("aria-expanded", "false"); }
   });

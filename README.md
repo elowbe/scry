@@ -127,7 +127,9 @@ Steam and display settings are discovered automatically where supported. Relativ
 
 ## Input controls
 
-- Click the video to request relative mouse capture. The stream includes the host cursor when visible.
+- Click the video to lock the mouse to the stream. A virtual cursor moves immediately on the client; its absolute position is sent to the host. The host cursor is excluded from video, and its image/hotspot is sent separately.
+- Mouse down/up, dragging and scrolling use a reliable ordered channel. Hidden-cursor games retain relative camera input and host recentering.
+- Wayland cursor images require compositor metadata support and the PipeWire development package/C compiler installed by `scripts/install-host.sh`. A separate read-only metadata reader uses public PipeWire APIs; it does not inject into the capture process.
 - Press **Escape** to release pointer lock. Use the player's **ESC** button to send Escape to the host.
 - Keyboard input follows physical key positions rather than characters from the client's keyboard layout.
 - The first standard-mapped browser controller is exposed as an Xbox-compatible controller.

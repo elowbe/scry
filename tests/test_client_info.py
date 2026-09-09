@@ -30,15 +30,18 @@ async def test_info_describes_complete_client_protocol(tmp_path):
     assert response.headers["Cache-Control"] == "no-store"
     info = json.loads(response.body)
 
-    assert info["protocol_version"] == 1
+    assert info["protocol_version"] == 2
     assert info["authentication"]["required_for"] == "Every route except GET /healthz"
     assert info["client_config"]["ice_servers"] == [
         {"urls": ["stun:stun.example.test:3478"]}
     ]
     assert info["input"]["keyboard_codes"] == list(DOM_CODES)
     assert {packet["type"] for packet in info["input"]["packets"]} == {
-        "0x01", "0x02", "0x03", "0x04", "0x10", "0x7f"
+        "0x01", "0x02", "0x03", "0x04", "0x05", "0x10", "0x7f"
     }
+    assert info["cursor"]["channel"]["ordered"] is True
+    assert info["cursor"]["channel"]["reliable"] is True
+    assert set(info["cursor"]["hosts"]) == {"windows", "x11", "wayland"}
     documented = {(item["method"], item["path"]) for item in info["endpoints"]}
     assert {
         ("GET", "/info"),

@@ -117,6 +117,7 @@
 
   <section id="player" class="player hidden" aria-label="Game stream player">
     <video id="video" autoplay playsinline></video>
+    <div id="cursorLayer" class="cursor-layer hidden" aria-hidden="true"><img id="localCursor" src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2224%22 height=%2224%22%3E%3Cpath d=%22M2 2L2 21L7 16L11 23L15 21L11 14L19 14Z%22 fill=%22white%22 stroke=%22black%22/%3E%3C/svg%3E" alt="" draggable="false"></div>
     <div id="playerBackdrop" class="player-backdrop">
       <div class="loader"></div>
       <h2 id="playerStatus">Starting stream</h2>

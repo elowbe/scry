@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import queue as thread_queue
 import subprocess
@@ -46,12 +47,12 @@ def _capture_input(config: StreamConfig, width: int, height: int) -> list[str]:
         return ["-f", "rawvideo", "-pixel_format", "rgba", "-video_size",
                 f"{config.width}x{config.height}", "-framerate", str(config.fps), "-i", "pipe:0"]
     if config.capture_backend == "gdigrab":
-        return ["-f", "gdigrab", "-draw_mouse", "1", "-framerate", str(config.fps), "-i", "desktop"]
+        return ["-f", "gdigrab", "-draw_mouse", "0", "-framerate", str(config.fps), "-i", "desktop"]
     if config.capture_backend == "x11grab":
         return [
             "-thread_queue_size", "2",
             "-f", "x11grab",
-            "-draw_mouse", "1",
+            "-draw_mouse", "0",
             "-framerate", str(config.fps),
             "-i", config.display,
         ]
@@ -233,6 +234,7 @@ class EncodedVideoTrack(MediaStreamTrack):
         self.queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=1)
         self._stopped = threading.Event()
         self._ready = asyncio.Event()
+        self.cursor_updated = asyncio.Event()
         self._logs = deque(maxlen=20)
         self._threads: list[threading.Thread] = []
         self.capture: subprocess.Popen | None = None
@@ -323,8 +325,27 @@ class EncodedVideoTrack(MediaStreamTrack):
     def _log_loop(self, handle, label: str) -> None:
         if not handle:
             return
+        # Popen(bufsize=0) yields FileIO: its readline performs tiny raw reads
+        # for our large cursor JSON lines. Buffer the pipe, not cursor updates.
+        if isinstance(handle, io.RawIOBase):
+            handle = io.BufferedReader(handle, buffer_size=65536)
         for raw in iter(handle.readline, b""):
             line = raw.decode("utf-8", errors="replace").strip()
+            if line.startswith("SCRY_CURSOR "):
+                try:
+                    import json
+                    from .cursor import png_cursor
+                    update = json.loads(line[len("SCRY_CURSOR "):])
+                    if 'rgba_hex' in update:
+                        rgba = bytes.fromhex(update.pop('rgba_hex'))
+                        update.update(png_cursor(rgba, update['image_width'], update['image_height'], update['hotspot']))
+                    self.cursor_state = {**getattr(self, 'cursor_state', {}), **update, '_sample_id': time.monotonic_ns()}
+                    event = getattr(self, 'cursor_updated', None)
+                    if event is not None and not event.is_set():
+                        self.loop.call_soon_threadsafe(event.set)
+                except (ValueError, KeyError, TypeError):
+                    logger.warning("Invalid cursor metadata", exc_info=True)
+                continue
             if line:
                 self._logs.append(f"{label}: {line}")
                 logger.warning("media %s: %s", label, line)

@@ -12,7 +12,8 @@ from pathlib import Path
 from .auth import AuthManager
 from .catalog import Game, GameCatalog
 from .client_info import build_client_info
-from .config import AppConfig
+from .config import AppConfig, capture_backend
+from .cursor import create_cursor, PointerSession
 from .doctor import ready, run_checks
 from .dlss import FAST_HOST, ORDERED_BRIDGE, WARM_DLSS
 from .settings import apply_settings, public_settings
@@ -59,6 +60,8 @@ class SessionManager:
         except (OSError, ValueError, KeyError, TypeError):
             pass
         self.channel = None
+        self.pointer_channel = None
+        self.pointer_task = None
         self.telemetry_task: asyncio.Task | None = None
         self.warmup_task: asyncio.Task | None = None
         self.game_watch_task: asyncio.Task | None = None
@@ -173,6 +176,25 @@ class SessionManager:
 
             @pc.on("datachannel")
             def on_datachannel(channel):
+                if channel.label == "pointer":
+                    if self.pointer_channel is not None:
+                        channel.close()
+                        return
+                    self.pointer_channel = channel
+                    pointer = PointerSession(self.input)
+                    self.pointer_task = asyncio.create_task(self._pointer_loop(pc, channel, pointer))
+                    @channel.on("message")
+                    def on_pointer_message(message):
+                        if self.pc is not pc or not isinstance(message, bytes) or len(message) > 64:
+                            return
+                        try:
+                            pointer.handle(message)
+                        except ValueError:
+                            logger.debug("Ignored malformed pointer packet")
+                    @channel.on("close")
+                    def on_pointer_close():
+                        self.input.release_all()
+                    return
                 if channel.label != "input":
                     channel.close()
                     return
@@ -185,7 +207,7 @@ class SessionManager:
 
                 @channel.on("message")
                 def on_message(message):
-                    if isinstance(message, bytes) and len(message) <= 64:
+                    if self.pc is pc and isinstance(message, bytes) and len(message) <= 64 and message[:1] != b"\x05":
                         try:
                             self.input.handle(message)
                         except ValueError:
@@ -362,7 +384,65 @@ class SessionManager:
         except asyncio.CancelledError:
             pass
 
+    async def _pointer_loop(self, pc, channel, pointer):
+        provider = None
+        last_shape = None
+        shape_id = 0
+        missing_samples = 0
+        try:
+            provider = create_cursor(capture_backend(self.config.stream), self.config.stream.display)
+            pointer.provider = provider
+            while self.pc is pc and pc.connectionState not in {"failed", "closed"} and channel.readyState != "closed":
+                video = getattr(self.pipeline, "video", None)
+                updated = getattr(video, "cursor_updated", None) if provider is None else None
+                if updated is not None:
+                    # Wake on compositor updates; Event coalesces bursts to the
+                    # latest state instead of accumulating animation frames.
+                    try:
+                        await asyncio.wait_for(updated.wait(), timeout=1 / 60)
+                    except asyncio.TimeoutError:
+                        pass
+                    updated.clear()
+                else:
+                    await asyncio.sleep(1 / 60)
+                # Do not enqueue more stale shapes while a previous one is
+                # still waiting in SCTP. The next iteration takes newest state.
+                if channel.readyState != "open" or channel.bufferedAmount > 0:
+                    continue
+                sample = provider.sample() if provider else getattr(getattr(self.pipeline, "video", None), "cursor_state", None)
+                message = pointer.update(sample)
+                if not message:
+                    missing_samples += 1
+                    if missing_samples == 300:
+                        channel.send(json.dumps(dict(type='cursor_error', message='The host did not supply cursor metadata. Absolute mouse input remains available.')))
+                    continue
+                missing_samples = 0
+                shape = message.pop('image', None)
+                if shape and shape != last_shape:
+                    shape_id += 1
+                    for offset in range(0, len(shape), 12000):
+                        channel.send(json.dumps(dict(type='cursor_image', id=shape_id, offset=offset,
+                            total=len(shape), data=shape[offset:offset+12000])))
+                    last_shape = shape
+                channel.send(json.dumps(dict(message, image_id=shape_id)))
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.exception("Cursor metadata stopped")
+            if channel.readyState == 'open':
+                channel.send(json.dumps(dict(type='cursor_error', message=str(exc))))
+        finally:
+            pointer.provider = None
+            if provider:
+                provider.close()
+
     async def _close_peer(self) -> None:
+        task, self.pointer_task = self.pointer_task, None
+        if task:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self.pointer_channel = None
+        self.input.release_all()
         if self.warmup_task:
             await self.warmup_task
             self.warmup_task = None

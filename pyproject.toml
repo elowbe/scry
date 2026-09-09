@@ -41,6 +41,7 @@ addopts = "-q"
 
 
 [tool.setuptools.package-data]
+"gamestream" = ["cursor_pipewire.c"]
 "gamestream.dlss_support" = ["LICENSE"]
 
 [tool.setuptools.data-files]

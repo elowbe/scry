@@ -70,6 +70,14 @@ class WindowsInput:
                     (self.keys.add if args[1] else self.keys.discard)(key)
             elif kind == "mouse_move":
                 self.mouse.move(*(round(v * self.config.mouse_sensitivity) for v in args))
+            elif kind == "mouse_position":
+                import ctypes
+                user32 = ctypes.windll.user32
+                # gdigrab desktop covers the virtual desktop, including negatives.
+                left, top = user32.GetSystemMetrics(76), user32.GetSystemMetrics(77)
+                width, height = user32.GetSystemMetrics(78), user32.GetSystemMetrics(79)
+                self.mouse.position = (left + round(args[1] * (width - 1) / 65535),
+                                       top + round(args[2] * (height - 1) / 65535))
             elif kind == "mouse_button":
                 button = [self._mouse_module.Button.left, self._mouse_module.Button.middle,
                           self._mouse_module.Button.right, self._mouse_module.Button.x1,

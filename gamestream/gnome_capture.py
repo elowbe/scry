@@ -39,7 +39,7 @@ def monitor_area(state, connector=''):
     return connector, (target[0], target[1], round(width / scale), round(height / scale))
 
 
-def start(bus, Gio, GLib, monitor=''):
+def start(bus, Gio, GLib, monitor='', *, cursor_only=False):
     def call(path, interface, method, signature=None, args=()):
         return bus.call_sync(DESTINATION, path, interface, method,
                              GLib.Variant(signature, args) if signature else None,
@@ -54,8 +54,15 @@ def start(bus, Gio, GLib, monitor=''):
         # DMA-BUF consumers. Our CPU RGBA path can otherwise repeat one frame
         # forever while a fullscreen game bypasses normal compositor painting.
         # RecordArea schedules capture on scanout even for CPU buffers.
-        stream = call(session, DESTINATION + '.Session', 'RecordArea', '(iiiia{sv})',
-                      (*area, {'cursor-mode': GLib.Variant('u', 1)})).unpack()[0]
+        if cursor_only:
+            # Cursor metadata uses the standard monitor stream, separately from
+            # the existing RecordArea video path, keeping their buffer
+            # negotiation and lifetimes independent.
+            stream = call(session, DESTINATION + '.Session', 'RecordMonitor', '(sa{sv})',
+                          (monitor, {'cursor-mode': GLib.Variant('u', 2)})).unpack()[0]
+        else:
+            stream = call(session, DESTINATION + '.Session', 'RecordArea', '(iiiia{sv})',
+                          (*area, {'cursor-mode': GLib.Variant('u', 0)})).unpack()[0]
         nodes = []
         loop = GLib.MainLoop()
         def added(_bus, _sender, _path, _iface, _signal, parameters):

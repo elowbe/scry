@@ -39,7 +39,7 @@ def build_client_info(config: AppConfig, manager) -> dict:
     return {
         "name": "Scry - Server",
         "version": __version__,
-        "protocol_version": 1,
+        "protocol_version": 2,
         "description": "Authenticated HTTPS signalling for one WebRTC game or desktop streaming session.",
         "desktop_streaming": {
             "start": {"provider": "desktop", "game_id": "desktop", "dlss_enabled": False},
@@ -220,7 +220,7 @@ def build_client_info(config: AppConfig, manager) -> dict:
             "data_channel": {
                 "label": "input", "ordered": False, "maxRetransmits": 0,
                 "binary_type": "arraybuffer", "maximum_inbound_packet_bytes": 64,
-                "unexpected_labels": "closed by the host",
+                "unexpected_labels": "Labels other than input and pointer are closed by the host",
                 "server_message_encoding": "UTF-8 JSON text (not binary)",
                 "server_messages": [
                     {"type": "host", "fields": {"fps": "integer"}, "when": "channel open"},
@@ -231,10 +231,40 @@ def build_client_info(config: AppConfig, manager) -> dict:
                 ],
             },
         },
+        "cursor": {
+            "channel": {"label": "pointer", "ordered": True, "reliable": True, "binary_type": "arraybuffer"},
+            "ownership": "Client owns the visible cursor position. Render a virtual cursor immediately at the client mouse position, within Pointer Lock. Send absolute normalized positions to the host; do not predict from host mouse deltas.",
+            "capture": "The host OS cursor is excluded from captured video. The actual host cursor still exists for application hit testing and cursor-image queries. Software cursors drawn into game frames cannot be extracted as OS cursor images.",
+            "hosts": {"windows": "GetCursorInfo/GetIconInfo; absolute virtual-desktop positioning",
+                      "x11": "XFixes cursor image and XWarpPointer",
+                      "wayland": "Absolute uinput pointer; separate read-only PipeWire metadata consumer. Requires portal metadata cursor mode (or GNOME) and C compiler/PipeWire development headers from install-host.sh."},
+            "messages": {
+                "cursor_image": {"id": "image revision", "offset": "character offset", "total": "total data URL characters",
+                    "data": "PNG data URL fragment, at most 12000 characters; assemble in order by id"},
+                "cursor": {"image_id": "image revision", "epoch": "position-reset generation",
+                    "warp": "true only for host repositioning or cursor visibility transitions",
+                    "warp_reason": "initial, visibility, external, or null; external requires confirmed host movement",
+                    "x": "normalized 0..1 host hotspot x", "y": "normalized 0..1 host hotspot y",
+                    "width": "host capture coordinate width", "height": "host capture coordinate height",
+                    "image_width": "cursor bitmap width", "image_height": "cursor bitmap height",
+                    "hotspot": "[x,y] within bitmap", "visible": "false when the game hides its cursor"},
+                "cursor_error": {"message": "cursor metadata failure; show to user"},
+            },
+            "rendering": "Use the video content rectangle, excluding letterboxing, to map client mouse position to 0..1. Scale the host bitmap and hotspot to this rectangle. Ordinary image updates must never move the client cursor. Hide the virtual cursor on pointer-lock loss.",
+            "warps": "Apply a host reset only when its epoch increases. Send that epoch on absolute packets; the host rejects obsolete epochs so queued client positions cannot undo game recentering. Wayland position resets require observing the requested position, then a fresh sample departing from it without intervening client input. Cached samples or elapsed time alone never authorize resets. Ignore legacy unverified position resets, keep the client position, and resend it with the new epoch.",
+            "fps": "When the host cursor is hidden, keep Pointer Lock and send relative 0x02 camera motion, including movement past screen edges. Return to absolute positioning when it becomes visible. Raw-input FPS games require this exception to absolute mouse positioning.",
+            "actions": "Send position then button transition/wheel on the same reliable ordered pointer channel. Do not synthesize button-up during movement or host warps; held buttons continue dragging. Send release_all on blur, hidden document, pointer-lock loss and disconnect.",
+            "image_updates": "Wayland metadata wakes the sender immediately; Windows/X11 are sampled at 60 Hz. PNG compression caches exact bitmap content, including animated frames. New shapes wait for outgoing data to drain, then use the latest host image rather than queueing stale frames.",
+            "backpressure": "Coalesce unsent motion to the newest position. Flush that position before each button/wheel action. Never drop button-up or release_all.",
+            "setup": "Create both input and pointer channels before creating the WebRTC offer. Reset epoch to 0 and cursor state on every new peer. Input channel remains available for legacy relative input and gamepads.",
+        },
         "input": {
-            "transport": "Binary messages on the input RTCDataChannel.",
+            "transport": "Binary keyboard/mouse/release messages on reliable pointer RTCDataChannel; gamepads and legacy relative input use input. Absolute positions require pointer.",
             "byte_order": "little-endian for every multibyte integer",
             "packets": [
+                {"name": "mouse_position", "type": "0x05", "length": 9,
+                 "layout": ["u8 type", "u32 epoch", "u16 x", "u16 y"],
+                 "note": "Absolute position: 0=left/top, 65535=right/bottom. Use the latest host cursor epoch (0 before first update). No mouse sensitivity multiplier. Send only while host cursor is visible."},
                 {
                     "name": "key", "type": "0x01", "length": 4,
                     "layout": ["u8 type", "u8 down (0|1)", "u16 code_id"],
@@ -287,7 +317,7 @@ def build_client_info(config: AppConfig, manager) -> dict:
             "HTTPS with the host certificate trusted by the client",
             "WebRTC with H.264 video support",
             "RTCDataChannel support",
-            "Pointer Lock for relative mouse control (browser clients)",
+            "Pointer Lock for a confined local virtual cursor and hidden-cursor FPS camera input (browser clients)",
             "Gamepad API with standard mapping for controller control (browser clients)",
         ],
     }
