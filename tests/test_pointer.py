@@ -94,6 +94,7 @@ async def test_pointer_loop_sends_image_before_state(tmp_path, monkeypatch):
     manager.pipeline = SimpleNamespace(video=SimpleNamespace(cursor_state=dict(sample(),
         **png_cursor(b'\xff\x00\x00\xff',1,1))))
     monkeypatch.setattr('gamestream.server.create_cursor', lambda *_: None)
+    monkeypatch.setattr('gamestream.server.create_game_cursor', lambda *_: None)
     sent = []
     def send(payload):
         sent.append(json.loads(payload))
@@ -219,6 +220,7 @@ async def test_wayland_cursor_event_sends_latest_shape_after_congestion(tmp_path
         **png_cursor(b'\xff\x00\x00\xff', 1, 1)))
     manager.pipeline = SimpleNamespace(video=video)
     monkeypatch.setattr('gamestream.server.create_cursor', lambda *_: None)
+    monkeypatch.setattr('gamestream.server.create_game_cursor', lambda *_: None)
     sent = []
     def send(payload):
         sent.append(json.loads(payload))
@@ -235,3 +237,66 @@ async def test_wayland_cursor_event_sends_latest_shape_after_congestion(tmp_path
     assert sent[0]['data'] == latest['image']
     assert sent[-1]['type'] == 'cursor'
     assert not updated.is_set()
+
+
+def test_x11_refreshes_changed_bitmap_with_reused_serial():
+    from gamestream.cursor import X11Cursor
+    item=SimpleNamespace(x=40,y=50,width=1,height=1,xhot=0,yhot=0,serial=7,pixels=[0xffff0000])
+    cursor=object.__new__(X11Cursor)
+    cursor.display=1; cursor.serial=None; cursor.shape={}
+    cursor.f=SimpleNamespace(XFixesGetCursorImage=lambda _:SimpleNamespace(contents=item))
+    cursor.x=SimpleNamespace(XDefaultScreen=lambda _:0,XDisplayWidth=lambda *_:1920,
+                             XDisplayHeight=lambda *_:1080,XFree=lambda _:None)
+    loading=cursor.sample()
+    item.pixels=[0xff0000ff]  # same serial, different game cursor
+    normal=cursor.sample()
+    assert loading['image']!=normal['image']
+    assert normal['visible'] is True
+
+
+def test_empty_bitmap_clears_saved_image_in_capture_state():
+    from gamestream.media import EncodedVideoTrack
+    track=object.__new__(EncodedVideoTrack)
+    track.cursor_state=dict(sample(),image='old targeting cursor')
+    track._log_loop(io.BytesIO(b'SCRY_CURSOR {"visible": false, "image": null}\n'),'test')
+    assert track.cursor_state['image'] is None
+    assert track.cursor_state['visible'] is False
+
+
+def test_xwayland_appearance_only_and_native_focus_fallback():
+    import ctypes
+    from gamestream.cursor import XWaylandCursor
+    cursor=object.__new__(XWaylandCursor)
+    cursor.display=1
+    focused=[123]
+    def focus(_display, window, _revert):
+        ctypes.cast(window,ctypes.POINTER(ctypes.c_ulong))[0]=focused[0]
+    cursor.x=SimpleNamespace(XGetInputFocus=focus)
+    cursor.sample=lambda:dict(sample(1,2),image='fresh targeting cursor',image_width=32,image_height=32,hotspot=[2,3])
+    appearance=cursor.focused_sample()
+    assert appearance['image']=='fresh targeting cursor'
+    assert 'x' not in appearance and 'y' not in appearance and 'width' not in appearance
+    for window in (0,1):
+        focused[0]=window
+        assert cursor.focused_sample() is None
+
+
+@pytest.mark.asyncio
+async def test_focused_game_shape_overrides_stalled_compositor_image(tmp_path,monkeypatch):
+    from gamestream.server import SessionManager
+    manager=SessionManager(AppConfig(source=tmp_path/'config.toml'))
+    manager.pc=pc=SimpleNamespace(connectionState='connected')
+    manager.pipeline=SimpleNamespace(video=SimpleNamespace(cursor_state=dict(sample(),image='old loading globe')))
+    monkeypatch.setattr('gamestream.server.create_cursor',lambda *_:None)
+    fresh=png_cursor(b'\xff\xff\xff\xff',1,1)
+    provider=SimpleNamespace(focused_sample=lambda:dict(fresh,visible=True),close=Mock())
+    monkeypatch.setattr('gamestream.server.create_game_cursor',lambda *_:provider)
+    sent=[]
+    def send(payload):
+        sent.append(json.loads(payload))
+        if sent[-1]['type']=='cursor':pc.connectionState='closed'
+    channel=SimpleNamespace(readyState='open',bufferedAmount=0,send=send)
+    await asyncio.wait_for(manager._pointer_loop(pc,channel,PointerSession(manager.input)),1)
+    assert sent[0]['data']==fresh['image']
+    assert sent[-1]['x']==.5
+    provider.close.assert_called_once()

@@ -92,4 +92,12 @@ assert.ok(Math.abs(run('cursor.x')-.25)<1e-12);
 assert.equal(run('cursor.y'),.5);
 assert.equal(run('lockRequests'),1);
 assert.equal(run('cursor.pending'),true);
+run(`
+  cursor.image='old loading globe'; cursor.imageId=7;
+  receiveCursor({type:'cursor',epoch:cursor.epoch,image_id:0,warp:false,x:.5,y:.5,width:1920,height:1080,visible:false});
+`);
+assert.equal(run('cursor.image'),null);
+assert.equal(run('cursor.imageId'),0);
+assert.equal(get('#localCursor').src,run('DEFAULT_CURSOR_IMAGE'));
+assert.equal(get('#cursorLayer').classList.contains('hidden'),true);
 console.log('PASS: local absolute cursor, letterboxing, image-only updates, drag order, FPS/recenter, edge clamp, coalescing, release and reconnect');

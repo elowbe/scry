@@ -13,7 +13,7 @@ from .auth import AuthManager
 from .catalog import Game, GameCatalog
 from .client_info import build_client_info
 from .config import AppConfig, capture_backend
-from .cursor import create_cursor, PointerSession
+from .cursor import create_cursor, create_game_cursor, PointerSession
 from .doctor import ready, run_checks
 from .dlss import FAST_HOST, ORDERED_BRIDGE, WARM_DLSS
 from .settings import apply_settings, public_settings
@@ -386,11 +386,13 @@ class SessionManager:
 
     async def _pointer_loop(self, pc, channel, pointer):
         provider = None
+        game_cursor = None
         last_shape = None
         shape_id = 0
         missing_samples = 0
         try:
             provider = create_cursor(capture_backend(self.config.stream), self.config.stream.display)
+            game_cursor = create_game_cursor(capture_backend(self.config.stream))
             pointer.provider = provider
             while self.pc is pc and pc.connectionState not in {"failed", "closed"} and channel.readyState != "closed":
                 video = getattr(self.pipeline, "video", None)
@@ -410,6 +412,10 @@ class SessionManager:
                 if channel.readyState != "open" or channel.bufferedAmount > 0:
                     continue
                 sample = provider.sample() if provider else getattr(getattr(self.pipeline, "video", None), "cursor_state", None)
+                if game_cursor:
+                    appearance = game_cursor.focused_sample()
+                    if appearance and sample:
+                        sample = dict(sample, **appearance)
                 message = pointer.update(sample)
                 if not message:
                     missing_samples += 1
@@ -417,14 +423,17 @@ class SessionManager:
                         channel.send(json.dumps(dict(type='cursor_error', message='The host did not supply cursor metadata. Absolute mouse input remains available.')))
                     continue
                 missing_samples = 0
+                cleared = 'image' in message and message['image'] is None
                 shape = message.pop('image', None)
+                if cleared:
+                    last_shape = None
                 if shape and shape != last_shape:
                     shape_id += 1
                     for offset in range(0, len(shape), 12000):
                         channel.send(json.dumps(dict(type='cursor_image', id=shape_id, offset=offset,
                             total=len(shape), data=shape[offset:offset+12000])))
                     last_shape = shape
-                channel.send(json.dumps(dict(message, image_id=shape_id)))
+                channel.send(json.dumps(dict(message, image_id=0 if cleared else shape_id)))
         except asyncio.CancelledError:
             pass
         except Exception as exc:
@@ -433,6 +442,8 @@ class SessionManager:
                 channel.send(json.dumps(dict(type='cursor_error', message=str(exc))))
         finally:
             pointer.provider = None
+            if game_cursor:
+                game_cursor.close()
             if provider:
                 provider.close()
 

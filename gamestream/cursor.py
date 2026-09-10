@@ -61,16 +61,17 @@ class X11Cursor:
             item = pointer.contents
             if not (0 < item.width <= 384 and 0 < item.height <= 384):
                 return None
-            if item.serial != self.serial:
-                rgba = bytearray()
-                for i in range(item.width * item.height):
-                    pixel = item.pixels[i]
-                    a = (pixel >> 24) & 255
-                    # XFixes pixels are premultiplied ARGB.
-                    rgba.extend([min(255, ((pixel >> shift) & 255) * 255 // a) if a else 0 for shift in (16, 8, 0)] + [a])
-                self.shape = png_cursor(bytes(rgba), item.width, item.height, (item.xhot, item.yhot))
-                self.shape['visible'] = any(rgba[3::4])
-                self.serial = item.serial
+            # Query pixels even when the server reuses a serial/handle. The PNG
+            # cache is keyed by exact content, so animations remain cheap.
+            rgba = bytearray()
+            for i in range(item.width * item.height):
+                pixel = item.pixels[i]
+                a = (pixel >> 24) & 255
+                # XFixes pixels are premultiplied ARGB.
+                rgba.extend([min(255, ((pixel >> shift) & 255) * 255 // a) if a else 0 for shift in (16, 8, 0)] + [a])
+            self.shape = png_cursor(bytes(rgba), item.width, item.height, (item.xhot, item.yhot))
+            self.shape['visible'] = any(rgba[3::4])
+            self.serial = item.serial
             screen = self.x.XDefaultScreen(self.display)
             return dict(x=item.x, y=item.y, width=self.x.XDisplayWidth(self.display, screen),
                         height=self.x.XDisplayHeight(self.display, screen), **self.shape)
@@ -88,6 +89,35 @@ class X11Cursor:
         if self.display:
             self.x.XCloseDisplay(self.display)
             self.display = None
+
+
+class XWaylandCursor(X11Cursor):
+    """Read focused XWayland game shapes without waiting for screen repaint.
+
+    Never use this connection for pointer coordinates or input injection.
+    Native Wayland windows have no X input focus; their shapes stay owned by
+    the compositor metadata stream.
+    """
+    def __init__(self):
+        super().__init__(os.environ['DISPLAY'])
+        self.x.XGetInputFocus.argtypes = [C.c_void_p, C.POINTER(C.c_ulong), C.POINTER(C.c_int)]
+
+    def focused_sample(self):
+        focus, revert = C.c_ulong(), C.c_int()
+        self.x.XGetInputFocus(self.display, C.byref(focus), C.byref(revert))
+        if focus.value in (0, 1):  # None or PointerRoot, not a focused game window
+            return None
+        result = self.sample()
+        return {key: result[key] for key in ('image', 'image_width', 'image_height', 'hotspot', 'visible')} if result else None
+
+
+def create_game_cursor(backend):
+    if backend in {'gnome', 'pipewire'} and os.environ.get('DISPLAY'):
+        try:
+            return XWaylandCursor()
+        except (OSError, RuntimeError):
+            pass  # XWayland is optional; native Wayland still uses PipeWire.
+    return None
 
 
 def create_cursor(backend, display):

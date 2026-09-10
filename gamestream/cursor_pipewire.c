@@ -10,7 +10,8 @@
 #include <stdlib.h>
 
 struct reader { struct pw_main_loop *loop; struct pw_stream *stream;
-    struct spa_hook listener; uint32_t width, height; };
+    struct spa_hook listener; uint32_t width, height;
+    int32_t cursor_x, cursor_y; int sprite_visible; };
 
 static void quit(void *data, int signal_number) {
     (void)signal_number;
@@ -42,42 +43,66 @@ static void format_changed(void *data, uint32_t id, const struct spa_pod *param)
         SPA_PARAM_META_size, SPA_POD_CHOICE_RANGE_Int(max_size, sizeof(struct spa_meta_cursor), max_size));
     pw_stream_update_params(r->stream, params, 2);
 }
+/* Every metadata record describes current cursor validity. An invalid cursor
+ * hides the overlay; only bitmap_offset==0 preserves a previous bitmap. */
+static void emit_cursor(struct reader *r, const struct spa_meta *meta) {
+    if (!r->width || !r->height) return;
+    const struct spa_meta_cursor *cursor = meta && meta->data && meta->size >= sizeof(*cursor) ? meta->data : NULL;
+    if (!cursor || !cursor->id) {
+        printf("{\"x\":%d,\"y\":%d,\"width\":%u,\"height\":%u,\"visible\":false}\n",
+            r->cursor_x, r->cursor_y, r->width, r->height);
+        fflush(stdout);
+        return;
+    }
+    r->cursor_x = cursor->position.x; r->cursor_y = cursor->position.y;
+    printf("{\"x\":%d,\"y\":%d,\"width\":%u,\"height\":%u",r->cursor_x,r->cursor_y,r->width,r->height);
+    uint32_t off = cursor->bitmap_offset;
+    if (!off) {
+        printf(",\"visible\":%s}\n",r->sprite_visible ? "true" : "false");
+        fflush(stdout);
+        return;
+    }
+    /* A bitmap replacement invalidates the old image, even if empty or
+     * unsupported. Never leave a previous targeting/loading sprite active. */
+    r->sprite_visible = 0;
+    const struct spa_meta_bitmap *bitmap = NULL;
+    if (off >= sizeof(*cursor) && off <= meta->size && meta->size-off >= sizeof(*bitmap))
+        bitmap = SPA_PTROFF(cursor,off,const struct spa_meta_bitmap);
+    int red=0, green=1, blue=2, alpha=3, supported=1;
+    if (bitmap) switch (bitmap->format) {
+        case SPA_VIDEO_FORMAT_RGBA: break;
+        case SPA_VIDEO_FORMAT_BGRA: red=2; blue=0; break;
+        case SPA_VIDEO_FORMAT_ARGB: red=1; green=2; blue=3; alpha=0; break;
+        case SPA_VIDEO_FORMAT_ABGR: red=3; green=2; blue=1; alpha=0; break;
+        case SPA_VIDEO_FORMAT_RGBx: alpha=-1; break;
+        case SPA_VIDEO_FORMAT_BGRx: red=2; blue=0; alpha=-1; break;
+        case SPA_VIDEO_FORMAT_xRGB: red=1; green=2; blue=3; alpha=-1; break;
+        case SPA_VIDEO_FORMAT_xBGR: red=3; green=2; blue=1; alpha=-1; break;
+        default: supported=0;
+    }
+    uint32_t w=bitmap ? bitmap->size.width : 0, h=bitmap ? bitmap->size.height : 0;
+    if (!bitmap || !supported || !w || !h || w>384 || h>384 || bitmap->offset<sizeof(*bitmap) ||
+        bitmap->stride < (int32_t)w*4 ||
+        (uint64_t)off+bitmap->offset+(uint64_t)bitmap->stride*(h-1)+w*4 > meta->size) {
+        puts(",\"visible\":false,\"image\":null}"); fflush(stdout); return;
+    }
+    const uint8_t *pixels=SPA_PTROFF(bitmap,bitmap->offset,const uint8_t);
+    for (uint32_t y=0;y<h;y++) for (uint32_t x=0;x<w;x++)
+        r->sprite_visible |= alpha<0 ? 255 : pixels[y*bitmap->stride+x*4+alpha];
+    printf(",\"visible\":%s,\"image_width\":%u,\"image_height\":%u,\"hotspot\":[%d,%d],\"rgba_hex\":\"",
+        r->sprite_visible ? "true" : "false",w,h,cursor->hotspot.x,cursor->hotspot.y);
+    for (uint32_t y=0;y<h;y++) for (uint32_t x=0;x<w;x++) {
+        const uint8_t *p=pixels+y*bitmap->stride+x*4;
+        printf("%02x%02x%02x%02x",p[red],p[green],p[blue],alpha<0 ? 255 : p[alpha]);
+    }
+    puts("\"}"); fflush(stdout);
+}
 static void process(void *data) {
-    struct reader *r = data;
+    struct reader *r=data;
     struct pw_buffer *buffer;
-    while ((buffer = pw_stream_dequeue_buffer(r->stream))) {
-        struct spa_meta *meta = spa_buffer_find_meta(buffer->buffer, SPA_META_Cursor);
-        if (meta && meta->data && meta->size >= sizeof(struct spa_meta_cursor) && r->width && r->height) {
-            const struct spa_meta_cursor *cursor = meta->data;
-            if (cursor->id) {
-                printf("{\"x\":%d,\"y\":%d,\"width\":%u,\"height\":%u", cursor->position.x, cursor->position.y, r->width, r->height);
-                uint32_t off = cursor->bitmap_offset;
-                if (off >= sizeof(*cursor) && off <= meta->size - sizeof(struct spa_meta_bitmap)) {
-                    const struct spa_meta_bitmap *bitmap = SPA_PTROFF(cursor, off, const struct spa_meta_bitmap);
-                    uint32_t w = bitmap->size.width, h = bitmap->size.height;
-                    if (!bitmap->offset || !bitmap->format || !w || !h) {
-                        printf(",\"visible\":false");
-                    } else if (w <= 384 && h <= 384 && bitmap->stride >= (int32_t)w*4 &&
-                            bitmap->offset >= sizeof(*bitmap) &&
-                            (uint64_t)off + bitmap->offset + (uint64_t)bitmap->stride*(h-1) + w*4 <= meta->size &&
-                            (bitmap->format == SPA_VIDEO_FORMAT_RGBA || bitmap->format == SPA_VIDEO_FORMAT_BGRA)) {
-                        const uint8_t *pixels = SPA_PTROFF(bitmap, bitmap->offset, const uint8_t);
-                        int visible = 0;
-                        for (uint32_t y=0; y<h; y++) for (uint32_t x=0; x<w; x++)
-                            visible |= pixels[y*bitmap->stride+x*4+3];
-                        printf(",\"visible\":%s,\"image_width\":%u,\"image_height\":%u,\"hotspot\":[%d,%d],\"rgba_hex\":\"", visible ? "true" : "false", w, h, cursor->hotspot.x, cursor->hotspot.y);
-                        for (uint32_t y=0; y<h; y++) for (uint32_t x=0; x<w; x++) {
-                            const uint8_t *p = pixels + y*bitmap->stride + x*4;
-                            if (bitmap->format == SPA_VIDEO_FORMAT_BGRA) printf("%02x%02x%02x%02x",p[2],p[1],p[0],p[3]);
-                            else printf("%02x%02x%02x%02x",p[0],p[1],p[2],p[3]);
-                        }
-                        printf("\"");
-                    }
-                }
-                puts("}"); fflush(stdout);
-            }
-        }
-        pw_stream_queue_buffer(r->stream, buffer);
+    while ((buffer=pw_stream_dequeue_buffer(r->stream))) {
+        emit_cursor(r,spa_buffer_find_meta(buffer->buffer,SPA_META_Cursor));
+        pw_stream_queue_buffer(r->stream,buffer);
     }
 }
 static const struct pw_stream_events events = {

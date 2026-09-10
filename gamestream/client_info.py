@@ -241,7 +241,7 @@ def build_client_info(config: AppConfig, manager) -> dict:
             "messages": {
                 "cursor_image": {"id": "image revision", "offset": "character offset", "total": "total data URL characters",
                     "data": "PNG data URL fragment, at most 12000 characters; assemble in order by id"},
-                "cursor": {"image_id": "image revision", "epoch": "position-reset generation",
+                "cursor": {"image_id": "image revision; 0 explicitly clears the previous image", "epoch": "position-reset generation",
                     "warp": "true only for host repositioning or cursor visibility transitions",
                     "warp_reason": "initial, visibility, external, or null; external requires confirmed host movement",
                     "x": "normalized 0..1 host hotspot x", "y": "normalized 0..1 host hotspot y",
@@ -254,7 +254,7 @@ def build_client_info(config: AppConfig, manager) -> dict:
             "warps": "Apply a host reset only when its epoch increases. Send that epoch on absolute packets; the host rejects obsolete epochs so queued client positions cannot undo game recentering. Wayland position resets require observing the requested position, then a fresh sample departing from it without intervening client input. Cached samples or elapsed time alone never authorize resets. Ignore legacy unverified position resets, keep the client position, and resend it with the new epoch.",
             "fps": "When the host cursor is hidden, keep Pointer Lock and send relative 0x02 camera motion, including movement past screen edges. Return to absolute positioning when it becomes visible. Raw-input FPS games require this exception to absolute mouse positioning.",
             "actions": "Send position then button transition/wheel on the same reliable ordered pointer channel. Do not synthesize button-up during movement or host warps; held buttons continue dragging. Send release_all on blur, hidden document, pointer-lock loss and disconnect.",
-            "image_updates": "Wayland metadata wakes the sender immediately; Windows/X11 are sampled at 60 Hz. PNG compression caches exact bitmap content, including animated frames. New shapes wait for outgoing data to drain, then use the latest host image rather than queueing stale frames.",
+            "image_updates": "Focused XWayland games supply appearance directly through XFixes, independently of compositor frame delivery; native Wayland windows keep compositor metadata. Invalid Wayland cursor metadata hides the overlay. Empty/unsupported bitmap replacements clear the old image; position-only updates preserve it. X11 pixels are re-read even when the cursor serial is reused. Wayland metadata wakes the sender immediately; Windows/X11 are sampled at 60 Hz. PNG compression caches exact bitmap content, including animated frames. New shapes wait for outgoing data to drain, then use the latest host image rather than queueing stale frames.",
             "backpressure": "Coalesce unsent motion to the newest position. Flush that position before each button/wheel action. Never drop button-up or release_all.",
             "setup": "Create both input and pointer channels before creating the WebRTC offer. Reset epoch to 0 and cursor state on every new peer. Input channel remains available for legacy relative input and gamepads.",
         },

@@ -568,6 +568,10 @@ function receiveCursor(message) {
       cursor.pending = true;
     }
   }
+  if (message.image_id === 0) {
+    cursor.image = null; cursor.imageId = 0; cursor.assembly = null;
+    $("#localCursor").src = DEFAULT_CURSOR_IMAGE;
+  }
   cursor.ready = true;
   if (cursor.visible !== message.visible) { cursor.relativeX = cursor.relativeY = 0; }
   cursor.visible = message.visible;
